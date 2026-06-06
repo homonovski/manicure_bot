@@ -11,17 +11,16 @@ ADMIN_ID = int(os.getenv('ADMIN_ID'))
 # =================================================================
 
 bot = telebot.TeleBot(TOKEN)
+
 # --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect('manicure.db')
     c = conn.cursor()
-    # Таблица свободных слотов
     c.execute('''CREATE TABLE IF NOT EXISTS slots
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   date TEXT,
                   time TEXT,
                   is_free INTEGER DEFAULT 1)''')
-    # Таблица записей клиентов
     c.execute('''CREATE TABLE IF NOT EXISTS appointments
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   slot_id INTEGER,
@@ -41,6 +40,32 @@ def get_free_slots():
     slots = c.fetchall()
     conn.close()
     return slots
+
+def get_all_slots_with_status():
+    """Возвращает все слоты с указанием занят/свободен"""
+    conn = sqlite3.connect('manicure.db')
+    c = conn.cursor()
+    c.execute('''SELECT id, date, time, is_free FROM slots ORDER BY date, time''')
+    slots = c.fetchall()
+    conn.close()
+    return slots
+
+def delete_slot(slot_id):
+    """Удаляет слот и все записи клиентов, связанные с ним"""
+    conn = sqlite3.connect('manicure.db')
+    c = conn.cursor()
+    try:
+        # Удаляем записи клиентов
+        c.execute("DELETE FROM appointments WHERE slot_id = ?", (slot_id,))
+        # Удаляем сам слот
+        c.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
 
 def book_slot(slot_id, user_id, username, user_phone):
     conn = sqlite3.connect('manicure.db')
@@ -184,14 +209,14 @@ def button_my_appointments(message):
 def button_cancel(message):
     bot.send_message(message.chat.id, "Чтобы отменить запись, используйте команду:\n/cancel_app <id_записи>\n\nID записи можно посмотреть в /my_appointments")
 
-# --- АДМИН-КОМАНДЫ (только для мастера) ---
+# --- АДМИН-КОМАНДЫ ---
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID:
         bot.send_message(message.chat.id, "⛔ Нет доступа.")
         return
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('➕ Добавить слот', '📋 Все записи')
+    markup.add('➕ Добавить слот', '📋 Все записи', '🗑 Удалить слот')  # НОВАЯ КНОПКА
     bot.send_message(message.chat.id, "👩‍💼 Админ-панель:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.text == '➕ Добавить слот' and message.from_user.id == ADMIN_ID)
@@ -202,12 +227,39 @@ def add_slot_admin(message):
 def process_add_slot(message):
     try:
         date_str, time_str = message.text.split()
-        # очень простая проверка формата
         datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
         add_slot(date_str, time_str)
         bot.send_message(message.chat.id, f"✅ Слот {date_str} {time_str} добавлен.")
     except:
         bot.send_message(message.chat.id, "❌ Неверный формат. Попробуйте снова.")
+
+# НОВАЯ ФУНКЦИЯ: УДАЛЕНИЕ СЛОТА
+@bot.message_handler(func=lambda message: message.text == '🗑 Удалить слот' and message.from_user.id == ADMIN_ID)
+def delete_slot_menu(message):
+    slots = get_all_slots_with_status()
+    if not slots:
+        bot.send_message(message.chat.id, "Нет ни одного слота.")
+        return
+    text = "🗓 *Все слоты:*\n"
+    for slot_id, date, time, is_free in slots:
+        status = "✅ свободен" if is_free == 1 else "❌ занят"
+        text += f"🆔 `{slot_id}` → {date} {time} ({status})\n"
+    text += "\n💡 Чтобы удалить, отправь команду:\n`/delete_slot ID`"
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['delete_slot'])
+def delete_slot_by_id(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        slot_id = int(message.text.split()[1])
+    except:
+        bot.send_message(message.chat.id, "❌ Использование: /delete_slot <ID_слота>")
+        return
+    if delete_slot(slot_id):
+        bot.send_message(message.chat.id, f"✅ Слот #{slot_id} и все связанные записи удалены.")
+    else:
+        bot.send_message(message.chat.id, f"❌ Слот #{slot_id} не найден.")
 
 @bot.message_handler(func=lambda message: message.text == '📋 Все записи' and message.from_user.id == ADMIN_ID)
 def all_appointments_admin(message):
@@ -223,10 +275,8 @@ def all_appointments_admin(message):
 
 # --- ЗАПУСК БОТА ---
 def reminder_checker():
-    """Функция для напоминаний (запускается в отдельном потоке)"""
     import time
     while True:
-        now = datetime.now()
         conn = sqlite3.connect('manicure.db')
         c = conn.cursor()
         c.execute('''SELECT a.user_id, s.date, s.time 
