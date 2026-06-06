@@ -3,14 +3,14 @@ import sqlite3
 from datetime import datetime
 import threading
 import time
+import os
 
-# ========== НАСТРОЙКИ ==========
-TOKEN = '7979826289:AAE1eltGMCRzHx5UQ3cwmDXndd6DIqv3kks'
-ADMIN_ID = 1061012449  # ТВОЙ TELEGRAM ID (число)
-# ================================
+# ========== НАСТРОЙКИ (берутся из переменных окружения) ==========
+TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
+# =================================================================
 
 bot = telebot.TeleBot(TOKEN)
-
 # --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect('manicure.db')
